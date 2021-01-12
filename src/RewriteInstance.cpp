@@ -2853,6 +2853,30 @@ void RewriteInstance::disassembleFunctions() {
   }
 }
 
+void RewriteInstance::insertPTWrites() {
+  uint64_t FunctionCount = 0;
+  uint64_t TotalBBLCount = 0;
+  uint64_t ICount = 0;
+  uint64_t LoadCount = 0;
+  uint64_t StoreCount = 0;
+  std::vector<uint64_t> ICounts;
+  for (auto &BFI : BC->getBinaryFunctions()) {
+    BinaryFunction &Function = BFI.second;
+    FunctionCount += 1;
+    uint64_t BBLCount = 0;
+    Function.analyzeMemOperandAddress(ICounts, LoadCount, StoreCount, BBLCount);
+    TotalBBLCount += BBLCount;
+    for (const auto &I : ICounts) {
+      ICount += I;
+    }
+  }
+  outs() << "BOLT-PTWrite: total function counts, " << FunctionCount << "\n";
+  outs() << "BOLT-PTWrite: total bbl counts, " << TotalBBLCount << "\n";
+  outs() << "BOLT-PTWrite: total instruction counts, " << ICount << "\n";
+  outs() << "BOLT-PTWrite: total load counts, " << LoadCount << "\n";
+  outs() << "BOLT-PTWrite: total store counts, " << StoreCount << "\n";
+}
+
 void RewriteInstance::buildFunctionsCFG() {
   NamedRegionTimer T("buildCFG", "buildCFG", "buildfuncs",
                      "Build Binary Functions", opts::TimeBuild);
