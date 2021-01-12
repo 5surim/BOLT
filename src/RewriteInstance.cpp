@@ -215,6 +215,27 @@ Lite("lite",
   cl::cat(BoltCategory));
 
 static cl::opt<unsigned>
+LiteThresholdPct("lite-threshold-pct",
+  cl::desc("threshold (in percent) for selecting functions to process in lite "
+            "mode. Higher threshold means fewer functions to process. E.g "
+            "threshold of 90 means only top 10 percent of functions with "
+            "profile will be processed."),
+  cl::init(0),
+  cl::ZeroOrMore,
+  cl::Hidden,
+  cl::cat(BoltOptCategory));
+
+static cl::opt<unsigned>
+LiteThresholdCount("lite-threshold-count",
+  cl::desc("similar to '-lite-threshold-pct' but specify threshold using "
+           "absolute function call count. I.e. limit processing to functions "
+           "executed at least the specified number of times."),
+  cl::init(0),
+  cl::ZeroOrMore,
+  cl::Hidden,
+  cl::cat(BoltOptCategory));
+
+static cl::opt<unsigned>
 MaxFunctions("max-funcs",
   cl::desc("maximum number of functions to process"),
   cl::ZeroOrMore,
@@ -780,15 +801,14 @@ void RewriteInstance::run() {
   adjustCommandLineOptions();
   discoverFileObjects();
 
+  preprocessProfileData();
+
   // Skip disassembling if we have a translation table and we are running an
   // aggregation job.
   if (opts::AggregateOnly && BAT->enabledFor(InputFile)) {
-    preprocessProfileData();
     processProfileData();
     return;
   }
-
-  preprocessProfileData();
 
   selectFunctionsToProcess();
 
@@ -799,8 +819,6 @@ void RewriteInstance::run() {
   processProfileDataPreCFG();
 
   buildFunctionsCFG();
-
-  insertPTWrites();
 
   processProfileData();
 
@@ -2578,8 +2596,35 @@ void RewriteInstance::selectFunctionsToProcess() {
     exit(1);
   }
 
-  uint64_t NumFunctionsToProcess{0};
+  uint64_t LiteThresholdExecCount = 0;
+  if (opts::LiteThresholdPct) {
+    if (opts::LiteThresholdPct > 100)
+      opts::LiteThresholdPct = 100;
 
+    std::vector<const BinaryFunction *> TopFunctions;
+    for (auto &BFI : BC->getBinaryFunctions()) {
+      const BinaryFunction &Function = BFI.second;
+      if (ProfileReader->mayHaveProfileData(Function))
+        TopFunctions.push_back(&Function);
+    }
+    std::sort(TopFunctions.begin(), TopFunctions.end(),
+              [](const BinaryFunction *A, const BinaryFunction *B) {
+                return
+                    A->getKnownExecutionCount() < B->getKnownExecutionCount();
+              });
+
+    size_t Index = TopFunctions.size() * opts::LiteThresholdPct / 100;
+    if (Index)
+      --Index;
+    LiteThresholdExecCount = TopFunctions[Index]->getKnownExecutionCount();
+    outs() << "BOLT-INFO: limiting processing to functions with at least "
+           << LiteThresholdExecCount << " invocations\n";
+  }
+  LiteThresholdExecCount =
+      std::max(LiteThresholdExecCount,
+               static_cast<uint64_t>(opts::LiteThresholdCount));
+
+  uint64_t NumFunctionsToProcess = 0;
   auto shouldProcess = [&](const BinaryFunction &Function) {
     if (opts::MaxFunctions && NumFunctionsToProcess > opts::MaxFunctions) {
       return false;
@@ -2602,9 +2647,11 @@ void RewriteInstance::selectFunctionsToProcess() {
     }
 
     if (opts::Lite) {
-      if (ProfileReader && !ProfileReader->mayHaveProfileData(Function)) {
+      if (ProfileReader && !ProfileReader->mayHaveProfileData(Function))
         return false;
-      }
+
+      if (Function.getKnownExecutionCount() < LiteThresholdExecCount)
+        return false;
     }
 
     return true;
@@ -2613,7 +2660,7 @@ void RewriteInstance::selectFunctionsToProcess() {
   for (auto &BFI : BC->getBinaryFunctions()) {
     auto &Function = BFI.second;
 
-    // Pseudo functions are explicitely marked by us not to be processed.
+    // Pseudo functions are explicitly marked by us not to be processed.
     if (Function.isPseudo()) {
       Function.IsIgnored = true;
       Function.HasExternalRefRelocations = true;
@@ -2804,30 +2851,6 @@ void RewriteInstance::disassembleFunctions() {
     if (Function.getLSDAAddress() != 0)
       Function.parseLSDA(getLSDAData(), getLSDAAddress());
   }
-}
-
-void RewriteInstance::insertPTWrites() {
-  uint64_t FunctionCount = 0;
-  uint64_t TotalBBLCount = 0;
-  uint64_t ICount = 0;
-  uint64_t LoadCount = 0;
-  uint64_t StoreCount = 0;
-  std::vector<uint64_t> ICounts;
-  for (auto &BFI : BC->getBinaryFunctions()) {
-    BinaryFunction &Function = BFI.second;
-    FunctionCount += 1;
-    uint64_t BBLCount = 0;
-    Function.analyzeMemOperandAddress(ICounts, LoadCount, StoreCount, BBLCount);
-    TotalBBLCount += BBLCount;
-    for (const auto &I : ICounts) {
-      ICount += I;
-    }
-  }
-  outs() << "BOLT-PTWrite: total function counts, " << FunctionCount << "\n";
-  outs() << "BOLT-PTWrite: total bbl counts, " << TotalBBLCount << "\n";
-  outs() << "BOLT-PTWrite: total instruction counts, " << ICount << "\n";
-  outs() << "BOLT-PTWrite: total load counts, " << LoadCount << "\n";
-  outs() << "BOLT-PTWrite: total store counts, " << StoreCount << "\n";
 }
 
 void RewriteInstance::buildFunctionsCFG() {

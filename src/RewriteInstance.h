@@ -156,8 +156,6 @@ private:
   /// optimization.
   void disassembleFunctions();
 
-  void insertPTWrites();
-
   void buildFunctionsCFG();
 
   void postProcessFunctions();

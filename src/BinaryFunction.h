@@ -947,50 +947,6 @@ public:
     return nullptr;
   }
 
-  void analyzeMemOperandAddress(std::vector<uint64_t> &InstructionsPerBBLs, uint64_t &Loads, uint64_t &Stores, uint64_t &BBLCount) {
-    InstructionsPerBBLs.clear();
-    for(const auto &BB: BasicBlocks) {
-      uint64_t ICount = 0;
-      for (auto II = BB->begin(); II != BB->end(); ++II) {
-        auto &Inst = *II;
-        ICount++;
-        if (BC.MIB->isLoad(Inst) || BC.MIB->isStore(Inst)) {
-          if (BC.MIB->isLoad(Inst))
-            Loads++;
-          if (BC.MIB->isStore(Inst))
-            Stores++;
-
-          uint64_t TargetAddress(0);
-          if (BC.MIB->hasPCRelOperand(Inst)) {
-            auto DispOpI = BC.MIB->getMemOperandDisp(Inst);
-            assert(DispOpI != Inst.end() && "expected PC-relative displacement");
-            assert(DispOpI->isExpr() && "found PC-relative with non-symbolic displacement");
-
-            const MCSymbol *DisplSymbol;
-            uint64_t DisplOffset;
-
-            std::tie(DisplSymbol, DisplOffset) =
-              BC.MIB->getTargetSymbolInfo(DispOpI->getExpr());
-
-            if (!DisplSymbol)
-              continue;
-
-            auto *BD = BC.getBinaryDataByName(DisplSymbol->getName());
-            if (!BD)
-              continue;
-            TargetAddress = BD->getAddress() + DisplOffset;
-            outs() << "BOLT-PTWrite: LOAD/STORE instruction with the target address: " << TargetAddress << '\n';
-            outs() << "BOLT-PTWrite: LOAD/STORE instruction with the target address: 0x" << Twine::utohexstr(TargetAddress) << '\n';
-          } else if (!BC.MIB->evaluateMemOperandTarget(Inst, TargetAddress)) {
-            continue;
-          }
-        }
-      }
-      InstructionsPerBBLs.push_back(ICount);
-    }
-    BBLCount = BasicBlocks.size();
-  }
-
   /// Retrieve the landing pad BB associated with invoke instruction \p Invoke
   /// that is in \p BB. Return nullptr if none exists
   BinaryBasicBlock *getLandingPadBBFor(const BinaryBasicBlock &BB,
